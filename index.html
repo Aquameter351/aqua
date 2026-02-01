@@ -2,6 +2,8 @@
 <head>
   <meta charset="UTF-8"><title>AquaMeter Pro</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <style>
     body { font-family: -apple-system, sans-serif; background: #f0f4f8; margin: 0; padding: 0; color: #2c3e50; text-align: center; }
     .card { max-width: 450px; margin: 10px auto; background: #fff; padding: 20px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
@@ -35,17 +37,17 @@
     </div>
 
     <div id="main" class="tab-content active">
-      <span id="v-lit">0.00</span><span class="label" id="l-rem">ЛИТРОВ ОСТАЛОСЬ</span>
-      <div class="prog-bg"><div id="bar" class="prog-bar"></div><div id="perc" class="prog-text">0.00%</div></div>
-      <div class="data-grid">
-        <div class="data-item"><span class="label" id="l-tod">СЕГОДНЯ</span><br><span id="use" style="font-weight:bold">0.0</span> L</div>
-        <div class="data-item"><span class="label" id="l-flo">ПОТОК</span><br><span id="flow" style="font-weight:bold">0.0</span> l/m</div>
+        <span id="v-lit">0.00</span><span class="label">ЛИТРОВ ОСТАЛОСЬ</span>
+        <div class="prog-bg"><div id="bar" class="prog-bar"></div><div id="perc" class="prog-text">0.00%</div></div>
+        <div class="data-grid">
+          <div class="data-item"><span class="label">СЕГОДНЯ</span><br><span id="use" style="font-weight:bold">0.0</span> L</div>
+          <div class="data-item"><span class="label">ПОТОК</span><br><span id="flow" style="font-weight:bold">0.0</span> l/m</div>
+        </div>
+        <button class="btn-green" onclick="if(confirm('Full tank?')) send('FULL')">ПОЛНЫЙ БАК</button>
       </div>
-      <button class="btn-green" onclick="if(confirm(i18n[curLang].qFull)) send('FULL')">ПОЛНЫЙ БАК</button>
-    </div>
 
     <div id="hist" class="tab-content">
-      <h3 id="l-h7">РАСХОД (7 ДНЕЙ)</h3>
+      <h3>РАСХОД (7 ДНЕЙ)</h3>
       <svg id="svg-graph" viewBox="0 0 350 200"></svg>
     </div>
 
@@ -55,19 +57,13 @@
         ИМПУЛЬСОВ: <span id="cal-p" style="font-weight:bold">0</span>
         <button class="btn-green" style="margin-top:10px" onclick="send('CAL_STOP')">DONE (1L)</button>
       </div>
-      <div style="margin-top:20px; font-size:12px; color:#bdc3c7">Firmware v2.0 BLE | aquameter.pt</div>
     </div>
   </div>
 
   <script>
-    const i18n = {
-      0: { rem:"ОСТАЛОСЬ", tod:"СЕГОДНЯ", flo:"ПОТОК", ful:"ПОЛНЫЙ БАК", qFull:"Установить полный бак?", days:['Вс','Пн','Вт','Ср','Чт','Пт','Сб'] },
-      1: { rem:"LEFT", tod:"TODAY", flo:"FLOW", ful:"FULL TANK", qFull:"Set full?", days:['Sun','Mon','Tue','Wed','Thu','Fri','Sat'] },
-      2: { rem:"RESTANTES", tod:"HOJE", flo:"CAUDAL", ful:"CHEIO", qFull:"Definir cheio?", days:['Dom','Seg','Ter','Qua','Qui','Sex','Sáb'] }
-    };
-    let curLang = 2, charRX, charTX, hData = [0,0,0,0,0,0,0];
+    let charRX, charTX, hData = [0,0,0,0,0,0,0], curLang = 2;
+    const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
 
-    // Функция переключения вкладок
     const openTab = (id, btn) => {
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -76,43 +72,37 @@
       if(id === 'hist') drawGraph();
     };
 
-    // Главная логика подключения
     async function handleConnect() {
       try {
-        // Проверяем, есть ли уже разрешенные устройства (чтобы не открывать список)
+        // 1. Пытаемся получить список уже известных устройств
         const devices = await navigator.bluetooth.getDevices();
-        let device;
+        let device = devices.find(d => d.name === 'AquaMeter_Pro');
         
-        if (devices.length > 0) {
-          // Если устройство уже известно - берем его
-          device = devices[0];
-          console.log("Using known device: " + device.name);
-        } else {
-          // Если нет - открываем стандартное окно выбора (только один раз!)
+        if (!device) {
+          console.log("No known device found, requesting new...");
+          // 2. Если не нашли - запрашиваем (это вызовет список один раз)
           device = await navigator.bluetooth.requestDevice({
             filters: [{ name: 'AquaMeter_Pro' }],
-            optionalServices: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e']
+            optionalServices: [SERVICE_UUID]
           });
         }
         
         await startDevice(device);
       } catch (err) {
         console.log("Connect error: " + err);
-        // Если getDevices не сработал (например, первый раз), пробуем через выбор
-        try {
-          const device = await navigator.bluetooth.requestDevice({
+        // Резервный запуск списка, если getDevices совсем не сработал
+        const device = await navigator.bluetooth.requestDevice({
             filters: [{ name: 'AquaMeter_Pro' }],
-            optionalServices: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e']
-          });
-          await startDevice(device);
-        } catch(e) { alert("Bluetooth error: " + e); }
+            optionalServices: [SERVICE_UUID]
+        });
+        await startDevice(device);
       }
     }
 
-    // Запуск работы с устройством
     async function startDevice(device) {
+      document.getElementById('status').innerText = "CONNECTING... 🟡";
       const server = await device.gatt.connect();
-      const service = await server.getPrimaryService('6e400001-b5a3-f393-e0a9-e50e24dcca9e');
+      const service = await server.getPrimaryService(SERVICE_UUID);
       charRX = await service.getCharacteristic('6e400002-b5a3-f393-e0a9-e50e24dcca9e');
       charTX = await service.getCharacteristic('6e400003-b5a3-f393-e0a9-e50e24dcca9e');
       
@@ -120,7 +110,6 @@
       charTX.addEventListener('characteristicvaluechanged', (e) => {
         const d = new TextDecoder().decode(e.target.value).split('|');
         if(d.length < 8) return;
-        curLang = parseInt(d[7]);
         document.getElementById('v-lit').innerText = d[0];
         document.getElementById('use').innerText = d[4];
         document.getElementById('flow').innerText = d[3];
@@ -138,7 +127,7 @@
       send("SYNC " + new Date().getDay());
       document.getElementById('status').innerText = "CONNECTED 🟢";
       document.getElementById('btn-connect').style.display = "none";
-      
+
       device.addEventListener('gattserverdisconnected', () => {
         document.getElementById('status').innerText = "DISCONNECTED 🔴";
         document.getElementById('btn-connect').style.display = "block";
@@ -151,11 +140,10 @@
     }
 
     function drawGraph() {
-      const svg = document.getElementById('svg-graph'); const maxV = Math.max(...hData, 5); const l = i18n[curLang]; let html = '';
+      const svg = document.getElementById('svg-graph'); const maxV = Math.max(...hData, 5); let html = '';
       for(let i=0; i<7; i++) {
         let h = (hData[i] / maxV) * 150; let x = 10 + (i * 48);
         html += `<rect x="${x}" y="${170-h}" width="35" height="${h}" class="bar-svg" />`;
-        html += `<text x="${x+2}" y="190" style="font-size:11px; fill:#7f8c8d">${l.days[i]}</text>`;
         html += `<text x="${x}" y="${165-h}" style="font-size:10px; font-weight:bold">${hData[i].toFixed(1)}</text>`;
       }
       svg.innerHTML = html;
