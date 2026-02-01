@@ -26,7 +26,7 @@
 <body>
   <div class="card">
     <div id="status" style="color:#e74c3c; font-size: 12px; margin-bottom: 5px;">DISCONNECTED 🔴</div>
-    <button id="btn-connect" class="btn-blue" onclick="connect()">CONNECT AQUAMETER</button>
+    <button id="btn-connect" class="btn-blue" onclick="handleConnect()">CONNECT AQUAMETER</button>
 
     <div class="tabs">
       <button class="tab-btn active" onclick="openTab('main', this)">DASH</button>
@@ -41,7 +41,7 @@
         <div class="data-item"><span class="label" id="l-tod">СЕГОДНЯ</span><br><span id="use" style="font-weight:bold">0.0</span> L</div>
         <div class="data-item"><span class="label" id="l-flo">ПОТОК</span><br><span id="flow" style="font-weight:bold">0.0</span> l/m</div>
       </div>
-      <button class="btn-green" id="btn-ful" onclick="if(confirm(i18n[curLang].qFull)) send('FULL')">ПОЛНЫЙ БАК</button>
+      <button class="btn-green" onclick="if(confirm(i18n[curLang].qFull)) send('FULL')">ПОЛНЫЙ БАК</button>
     </div>
 
     <div id="hist" class="tab-content">
@@ -67,6 +67,7 @@
     };
     let curLang = 2, charRX, charTX, hData = [0,0,0,0,0,0,0];
 
+    // Функция переключения вкладок
     const openTab = (id, btn) => {
       document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -75,38 +76,73 @@
       if(id === 'hist') drawGraph();
     };
 
-    async function connect() {
+    // Главная логика подключения
+    async function handleConnect() {
       try {
-        const device = await navigator.bluetooth.requestDevice({
-          filters: [{ name: 'AquaMeter_Pro' }],
-          optionalServices: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e']
-        });
-        const server = await device.gatt.connect();
-        const service = await server.getPrimaryService('6e400001-b5a3-f393-e0a9-e50e24dcca9e');
-        charRX = await service.getCharacteristic('6e400002-b5a3-f393-e0a9-e50e24dcca9e');
-        charTX = await service.getCharacteristic('6e400003-b5a3-f393-e0a9-e50e24dcca9e');
+        // Проверяем, есть ли уже разрешенные устройства (чтобы не открывать список)
+        const devices = await navigator.bluetooth.getDevices();
+        let device;
         
-        await charTX.startNotifications();
-        charTX.addEventListener('characteristicvaluechanged', (e) => {
-          const d = new TextDecoder().decode(e.target.value).split('|');
-          curLang = parseInt(d[7]); const l = i18n[curLang];
-          document.getElementById('v-lit').innerText = d[0];
-          document.getElementById('use').innerText = d[4];
-          document.getElementById('flow').innerText = d[3];
-          let p = (parseFloat(d[0]) / parseFloat(d[1]) * 100);
-          document.getElementById('perc').innerText = p.toFixed(1) + "%";
-          document.getElementById('bar').style.width = (p > 100 ? 100 : p) + "%";
-          document.getElementById('bar').style.background = (parseFloat(d[0]) <= parseFloat(d[2])) ? "#e74c3c" : "#2196f3";
-          if(d[5] === "1") {
-             document.getElementById('cal-box').style.display = 'block';
-             document.getElementById('cal-p').innerText = d[6];
-          } else { document.getElementById('cal-box').style.display = 'none'; }
-          hData = d[8].split(',').map(Number);
-        });
-        send("SYNC " + new Date().getDay());
-        document.getElementById('status').innerText = "CONNECTED 🟢";
-        document.getElementById('btn-connect').style.display = "none";
-      } catch (err) { console.log(err); }
+        if (devices.length > 0) {
+          // Если устройство уже известно - берем его
+          device = devices[0];
+          console.log("Using known device: " + device.name);
+        } else {
+          // Если нет - открываем стандартное окно выбора (только один раз!)
+          device = await navigator.bluetooth.requestDevice({
+            filters: [{ name: 'AquaMeter_Pro' }],
+            optionalServices: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e']
+          });
+        }
+        
+        await startDevice(device);
+      } catch (err) {
+        console.log("Connect error: " + err);
+        // Если getDevices не сработал (например, первый раз), пробуем через выбор
+        try {
+          const device = await navigator.bluetooth.requestDevice({
+            filters: [{ name: 'AquaMeter_Pro' }],
+            optionalServices: ['6e400001-b5a3-f393-e0a9-e50e24dcca9e']
+          });
+          await startDevice(device);
+        } catch(e) { alert("Bluetooth error: " + e); }
+      }
+    }
+
+    // Запуск работы с устройством
+    async function startDevice(device) {
+      const server = await device.gatt.connect();
+      const service = await server.getPrimaryService('6e400001-b5a3-f393-e0a9-e50e24dcca9e');
+      charRX = await service.getCharacteristic('6e400002-b5a3-f393-e0a9-e50e24dcca9e');
+      charTX = await service.getCharacteristic('6e400003-b5a3-f393-e0a9-e50e24dcca9e');
+      
+      await charTX.startNotifications();
+      charTX.addEventListener('characteristicvaluechanged', (e) => {
+        const d = new TextDecoder().decode(e.target.value).split('|');
+        if(d.length < 8) return;
+        curLang = parseInt(d[7]);
+        document.getElementById('v-lit').innerText = d[0];
+        document.getElementById('use').innerText = d[4];
+        document.getElementById('flow').innerText = d[3];
+        let p = (parseFloat(d[0]) / parseFloat(d[1]) * 100);
+        document.getElementById('perc').innerText = p.toFixed(1) + "%";
+        document.getElementById('bar').style.width = (p > 100 ? 100 : p) + "%";
+        document.getElementById('bar').style.background = (parseFloat(d[0]) <= parseFloat(d[2])) ? "#e74c3c" : "#2196f3";
+        if(d[5] === "1") {
+           document.getElementById('cal-box').style.display = 'block';
+           document.getElementById('cal-p').innerText = d[6];
+        } else { document.getElementById('cal-box').style.display = 'none'; }
+        if(d[8]) hData = d[8].split(',').map(Number);
+      });
+      
+      send("SYNC " + new Date().getDay());
+      document.getElementById('status').innerText = "CONNECTED 🟢";
+      document.getElementById('btn-connect').style.display = "none";
+      
+      device.addEventListener('gattserverdisconnected', () => {
+        document.getElementById('status').innerText = "DISCONNECTED 🔴";
+        document.getElementById('btn-connect').style.display = "block";
+      });
     }
 
     async function send(msg) {
